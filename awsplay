@@ -2,10 +2,13 @@
 
 import argparse
 from boto import ec2
+import collections
 import logging
 import os
 import re
 import socket
+import subprocess
+import sys
 import time
 import traceback
 import requests
@@ -95,8 +98,10 @@ def require_instance(f):
 
 class Playground:
 
-	def __init__(self, connection):
+	def __init__(self, connection, remote_user, ssh_args):
 		self.connection = connection
+		self.remote_user = remote_user
+		self.ssh_args = ssh_args
 		reservations = self.connection.get_all_instances(filters= {
 			"tag:Name": "Playground"
 		})
@@ -111,6 +116,11 @@ class Playground:
 
 	@require_instance
 	def stop_instance(self):
+		active_users = self.get_active_users()
+		if len(active_users) > 0:
+			print("Instance {} still has active users; not stopping".format(self.instance))
+			print("\n".join(active_users))
+			return
 		print("Stopping instance {}".format(self.instance))
 		i = self.fetch_instance()
 		if i.state == "pending":
@@ -124,6 +134,22 @@ class Playground:
 		if i.state == "stopping":
 			print("Instance {} is already stopping".format(
 				self.instance))
+	
+	@require_instance
+	def get_active_users(self):
+		i = self.fetch_instance()
+		hostname = i.dns_name
+		command = [ "ssh"]
+		command.extend(self.ssh_args)
+		command.extend([
+			"{}@{}".format(self.remote_user, hostname),
+			"--",
+			"who"
+		])
+		print("Checking for active users on instance {}".format(self.instance))
+		p = subprocess.Popen(command, stdout=subprocess.PIPE)
+		stdout, _ = p.communicate()
+		return stdout.decode("utf-8").splitlines()
 
 	@require_instance
 	def start_instance(self):
@@ -171,7 +197,7 @@ class Playground:
 
 
 	@require_instance
-	def connect(self, user, sudo=False, *args):
+	def connect(self, sudo=False):
 		i = self.fetch_instance()
 		if i.state != "running":
 			self.start_instance()
@@ -179,8 +205,8 @@ class Playground:
 		i = self.fetch_instance()
 		hostname = i.dns_name
 		ssh_args = ["ssh"]
-		ssh_args.extend(args)
-		ssh_args.append("{}@{}".format(user, hostname))
+		ssh_args.extend(self.ssh_args)
+		ssh_args.append("{}@{}".format(self.remote_user, hostname))
 		if sudo:
 			print("Connecting to {} with root privileges".format(hostname))
 			ssh_args.append("--")
@@ -237,7 +263,16 @@ if __name__ == "__main__":
 
 	connection = ec2.connect_to_region(region, profile_name=args.profile)
 
-	playground = Playground(connection)
-	playground.connect(args.user, args.sudo)
+	playground = Playground(connection, args.user, args.ssh_args)
+	playground.connect(args.sudo)
 	if not args.keep_running:
-		playground.stop_instance()
+		try:
+			for i in range(3, 0, -1):
+				sys.stdout.write("\rShutting down instance {} in {} seconds; ^C to cancel".format(playground.instance, i))
+				sys.stdout.flush()
+				time.sleep(1)
+			print()
+			playground.stop_instance()
+		except KeyboardInterrupt:
+			print()
+			print("Leaving instance {} running".format(playground.instance))

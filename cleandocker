@@ -1,2 +1,11 @@
 #!/bin/sh
-exec docker rmi $(docker images | grep "^<none>" | awk '{print $3}')
+
+# Clean containers
+containers=$(docker ps -q -a -f status=exited)
+echo $containers
+[ -n "$containers" ] && docker rm $containers || true
+
+# Clean images
+images=$(docker images -q -a -f dangling=true)
+echo $images
+[ -n "$images" ] && docker rmi $images || true

@@ -228,7 +228,7 @@ def get_closest_region():
 	ip = requests.get("http://icanhazip.com").content.decode().strip()
 	country = requests.get("http://api.hostip.info/country.php?ip={}".format(ip)).content.decode().strip()
 	try:
-		region = REGION_MAPPING[country]
+		region = REGION_MAPPING.get(country, "ap-northeast-1")
 		print("Using region {} for {} in {}".format(region, ip, country))
 		return region
 	except KeyError:

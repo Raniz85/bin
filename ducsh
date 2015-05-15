@@ -1,0 +1,2 @@
+#!/bin/sh
+find $1 -maxdepth 1 -mindepth 1 | xargs -d "\n" du -csh $files | sort -h

@@ -1,0 +1,2 @@
+#!/bin/sh
+xinput --set-prop "Logitech USB-PS/2 Optical Mouse" "Device Accel Constant Deceleration" 3

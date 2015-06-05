@@ -224,10 +224,10 @@ REGION_MAPPING = {"A1":"us-east-1","A2":"us-east-1","AD":"eu-west-1","AE":"ap-so
 global DEFAULT_REGION
 DEFAULT_REGION = "us-east-1"
 
-I_CAN_HAZ_IP="http://ec2-52-6-172-231.compute-1.amazonaws.com/"
+WHOAMI="http://ec2-52-6-172-231.compute-1.amazonaws.com/"
 
 def get_closest_region():
-	ip = requests.get(I_CAN_HAZ_IP).content.decode().strip()
+	ip = requests.get(WHOAMI).content.decode().strip()
 	country = requests.get("http://api.hostip.info/country.php?ip={}".format(ip)).content.decode().strip()
 	try:
 		region = REGION_MAPPING.get(country, "ap-northeast-1")

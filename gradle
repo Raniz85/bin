@@ -1,0 +1,18 @@
+#!/bin/sh
+fallback=/usr/bin/gradle
+originalPwd=$(pwd)
+while [ $(pwd) != "/" ] &&  [ ! -f "gradlew" ];
+do
+	cd ..
+done
+if [ -f "gradlew" ];
+then
+	absPath=$(pwd)
+	echo "Running ${absPath}/gradlew in ${originalPwd}"
+	cd "${originalPwd}"
+	${absPath}/gradlew "$@"
+else
+	echo "Running ${fallback} in ${originalPwd}"
+	cd "${originalPwd}"
+	${fallback} "$@"
+fi

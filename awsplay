@@ -18,203 +18,203 @@ proxy_regex = re.compile("^http://([^:]+):([0-9]+)$")
 # Class that wraps a real socket and changes it to a HTTP tunnel whenever a connection is asked via the "connect" method
 class ProxySock :
 
-	def __init__(self, socket):
+    def __init__(self, socket):
 
-		# First, use the socket, without any change
-		self.socket = socket
+        # First, use the socket, without any change
+        self.socket = socket
 
-		# Create socket (use real one)
-		try:
-			proxy = os.environ["http_proxy"]
-			match = proxy_regex.match(proxy)
-			if match:
-				self.proxy_host = match.group(1)
-				self.proxy_port = int(match.group(2))
-			else:
-				self.proxy_host = None
-				self.proxy_port = None
-		except KeyError:
-			self.proxy_host = None
-			self.proxy_port = None
+        # Create socket (use real one)
+        try:
+            proxy = os.environ["http_proxy"]
+            match = proxy_regex.match(proxy)
+            if match:
+                self.proxy_host = match.group(1)
+                self.proxy_port = int(match.group(2))
+            else:
+                self.proxy_host = None
+                self.proxy_port = None
+        except KeyError:
+            self.proxy_host = None
+            self.proxy_port = None
 
-		# Copy attributes
-		self.family = socket.family
-		self.type = socket.type
-		self.proto = socket.proto
+        # Copy attributes
+        self.family = socket.family
+        self.type = socket.type
+        self.proto = socket.proto
 
-	def connect(self, address) :
-		if not self.proxy_host:
-			self.socket.connect(address)
-			return
+    def connect(self, address) :
+        if not self.proxy_host:
+            self.socket.connect(address)
+            return
 
-		# Store the real remote adress
-		(self.host, self.port) = address
+        # Store the real remote adress
+        (self.host, self.port) = address
 
-		# Try to connect to the proxy 
-		for (family, socktype, proto, canonname, sockaddr) in socket.getaddrinfo(
-				self.proxy_host, 
-				self.proxy_port,
-				0, 0, socket.SOL_TCP) :
-			try:
+        # Try to connect to the proxy 
+        for (family, socktype, proto, canonname, sockaddr) in socket.getaddrinfo(
+                self.proxy_host, 
+                self.proxy_port,
+                0, 0, socket.SOL_TCP) :
+            try:
 
-				# Replace the socket by a connection to the proxy
-				self.socket = socket.socket(family, socktype, proto)
-				self.socket.connect(sockaddr)
+                # Replace the socket by a connection to the proxy
+                self.socket = socket.socket(family, socktype, proto)
+                self.socket.connect(sockaddr)
 
-			except socket.error as msg:
-				if self.socket:
-					self.socket.close()
-				self.socket = None
-				continue
-			break
-		if not self.socket:
-			raise socket.error(ms)
+            except socket.error as msg:
+                if self.socket:
+                    self.socket.close()
+                self.socket = None
+                continue
+            break
+        if not self.socket:
+            raise socket.error(ms)
 
-		# Ask him to create a tunnel connection to the target host/port
-		self.socket.send(("CONNECT {}:{} HTTP/1.1\r\n" + 
-					"Host: {}:{}\r\n\r\n").format(self.host, self.port, self.host, self.port).encode("ascii"));
+        # Ask him to create a tunnel connection to the target host/port
+        self.socket.send(("CONNECT {}:{} HTTP/1.1\r\n" + 
+                    "Host: {}:{}\r\n\r\n").format(self.host, self.port, self.host, self.port).encode("ascii"));
 
-		# Get the response
-		resp = self.socket.recv(4096).decode("ascii")
+        # Get the response
+        resp = self.socket.recv(4096).decode("ascii")
 
-		# Parse the response
-		parts = resp.split()
+        # Parse the response
+        parts = resp.split()
 
-		# Not 200 ?
-		if parts[1] != "200" :
-			raise Exception("Error response from Proxy server : %s" % resp)
+        # Not 200 ?
+        if parts[1] != "200" :
+            raise Exception("Error response from Proxy server : %s" % resp)
 
-	# Delegate everything else to the socket
-	def __getattr__(self, attr):
-		return getattr(self.socket, attr)
+    # Delegate everything else to the socket
+    def __getattr__(self, attr):
+        return getattr(self.socket, attr)
 
 def require_instance(f):
-	def wrapper(*args):
-		if not args[0].instance:
-			raise ValueError("No playground exists in region {}".format(
-				args[0].connection.region.name ))
-		return f(*args)
-	return wrapper
+    def wrapper(*args):
+        if not args[0].instance:
+            raise ValueError("No playground exists in region {}".format(
+                args[0].connection.region.name ))
+        return f(*args)
+    return wrapper
 
 class Playground:
 
-	def __init__(self, connection, remote_user, ssh_args):
-		self.connection = connection
-		self.remote_user = remote_user
-		self.ssh_args = ssh_args
-		reservations = self.connection.get_all_instances(filters= {
-			"tag:Name": "Playground"
-		})
-		if len(reservations) >= 0:
-			self.instance = reservations[0].instances[0].id
-		else:
-			self.instance = None
+    def __init__(self, connection, remote_user, ssh_args):
+        self.connection = connection
+        self.remote_user = remote_user
+        self.ssh_args = ssh_args
+        reservations = self.connection.get_all_instances(filters= {
+            "tag:Name": "Playground"
+        })
+        if len(reservations) >= 0:
+            self.instance = reservations[0].instances[0].id
+        else:
+            self.instance = None
 
-	@require_instance
-	def fetch_instance(self):
-		return self.connection.get_all_instances(instance_ids=[self.instance])[0].instances[0]
+    @require_instance
+    def fetch_instance(self):
+        return self.connection.get_all_instances(instance_ids=[self.instance])[0].instances[0]
 
-	@require_instance
-	def stop_instance(self):
-		active_users = self.get_active_users()
-		if len(active_users) > 0:
-			print("Instance {} still has active users; not stopping".format(self.instance))
-			print("\n".join(active_users))
-			return
-		print("Stopping instance {}".format(self.instance))
-		i = self.fetch_instance()
-		if i.state == "pending":
-			print("Instance {} is starting; not shutting down".format(
-				self.instance))
-			return
-		if i.state == "running":
-			print("Instance {} is running; stopping".format(
-				self.instance))
-			self.connection.stop_instances(instance_ids=[self.instance])
-		if i.state == "stopping":
-			print("Instance {} is already stopping".format(
-				self.instance))
-	
-	@require_instance
-	def get_active_users(self):
-		i = self.fetch_instance()
-		hostname = i.dns_name
-		command = [ "ssh"]
-		command.extend(self.ssh_args)
-		command.extend([
-			"{}@{}".format(self.remote_user, hostname),
-			"--",
-			"who"
-		])
-		print("Checking for active users on instance {}".format(self.instance))
-		p = subprocess.Popen(command, stdout=subprocess.PIPE)
-		stdout, _ = p.communicate()
-		return stdout.decode("utf-8").splitlines()
+    @require_instance
+    def stop_instance(self):
+        active_users = self.get_active_users()
+        if len(active_users) > 0:
+            print("Instance {} still has active users; not stopping".format(self.instance))
+            print("\n".join(active_users))
+            return
+        print("Stopping instance {}".format(self.instance))
+        i = self.fetch_instance()
+        if i.state == "pending":
+            print("Instance {} is starting; not shutting down".format(
+                self.instance))
+            return
+        if i.state == "running":
+            print("Instance {} is running; stopping".format(
+                self.instance))
+            self.connection.stop_instances(instance_ids=[self.instance])
+        if i.state == "stopping":
+            print("Instance {} is already stopping".format(
+                self.instance))
+    
+    @require_instance
+    def get_active_users(self):
+        i = self.fetch_instance()
+        hostname = i.dns_name
+        command = [ "ssh"]
+        command.extend(self.ssh_args)
+        command.extend([
+            "{}@{}".format(self.remote_user, hostname),
+            "--",
+            "who"
+        ])
+        print("Checking for active users on instance {}".format(self.instance))
+        p = subprocess.Popen(command, stdout=subprocess.PIPE)
+        stdout, _ = p.communicate()
+        return stdout.decode("utf-8").splitlines()
 
-	@require_instance
-	def start_instance(self):
-		i = self.fetch_instance()
-		did_start = False
-		if i.state == "stopping":
-			print("Instance {} is stopping; waiting until stopped".format(
-				self.instance))
-			self.await_instance_state("stopped")
-			i = self.fetch_instance()
-		if i.state == "stopped":
-			print("Instance {} is stopped; starting".format(self.instance))
-			self.connection.start_instances(instance_ids=[self.instance])
-			did_start = True
-		elif i.state == "pending":
-			print("Instance {} is already starting".format(
-				self.instance))
-		self.await_instance_state()
+    @require_instance
+    def start_instance(self):
+        i = self.fetch_instance()
+        did_start = False
+        if i.state == "stopping":
+            print("Instance {} is stopping; waiting until stopped".format(
+                self.instance))
+            self.await_instance_state("stopped")
+            i = self.fetch_instance()
+        if i.state == "stopped":
+            print("Instance {} is stopped; starting".format(self.instance))
+            self.connection.start_instances(instance_ids=[self.instance])
+            did_start = True
+        elif i.state == "pending":
+            print("Instance {} is already starting".format(
+                self.instance))
+        self.await_instance_state()
 
-	@require_instance
-	def await_instance_state(self, desired_state="running"):
-		print("Waiting for instance {} to reach state '{}'".format(
-			self.instance, desired_state))
-		i = self.fetch_instance()
-		while i.state != desired_state:
-			time.sleep(0.5)
-			i = self.fetch_instance()
+    @require_instance
+    def await_instance_state(self, desired_state="running"):
+        print("Waiting for instance {} to reach state '{}'".format(
+            self.instance, desired_state))
+        i = self.fetch_instance()
+        while i.state != desired_state:
+            time.sleep(0.5)
+            i = self.fetch_instance()
 
-	def await_openssh(self):
-		def is_port22_open():
-			try:
-				s = ProxySock(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-				s.settimeout(1)
-				s.connect((hostname, 22))
-				s.close()
-				return True
-			except Exception as e:
-				pass
-			return False
-		i = self.fetch_instance()
-		hostname = i.dns_name
-		print("Waiting for port 22 to open on {}".format(hostname))
-		while not is_port22_open():
-			time.sleep(0.5)
+    def await_openssh(self):
+        def is_port22_open():
+            try:
+                s = ProxySock(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                s.settimeout(1)
+                s.connect((hostname, 22))
+                s.close()
+                return True
+            except Exception as e:
+                pass
+            return False
+        i = self.fetch_instance()
+        hostname = i.dns_name
+        print("Waiting for port 22 to open on {}".format(hostname))
+        while not is_port22_open():
+            time.sleep(0.5)
 
 
-	@require_instance
-	def connect(self, sudo=False):
-		i = self.fetch_instance()
-		if i.state != "running":
-			self.start_instance()
-		self.await_openssh()
-		i = self.fetch_instance()
-		hostname = i.dns_name
-		ssh_args = ["ssh"]
-		ssh_args.extend(self.ssh_args)
-		ssh_args.append("{}@{}".format(self.remote_user, hostname))
-		if sudo:
-			print("Connecting to {} with root privileges".format(hostname))
-			ssh_args.append("--")
-			ssh_args.append("sudo")
-			ssh_args.append("-s")
-		else:
-			print("Connecting to {}".format(hostname))
-		os.spawnvp(os.P_WAIT, "ssh", ssh_args)
+    @require_instance
+    def connect(self, sudo=False):
+        i = self.fetch_instance()
+        if i.state != "running":
+            self.start_instance()
+        self.await_openssh()
+        i = self.fetch_instance()
+        hostname = i.dns_name
+        ssh_args = ["ssh"]
+        ssh_args.extend(self.ssh_args)
+        ssh_args.append("{}@{}".format(self.remote_user, hostname))
+        if sudo:
+            print("Connecting to {} with root privileges".format(hostname))
+            ssh_args.append("--")
+            ssh_args.append("sudo")
+            ssh_args.append("-s")
+        else:
+            print("Connecting to {}".format(hostname))
+        os.spawnvp(os.P_WAIT, "ssh", ssh_args)
 
 
 # This is a mapping of all countries and their closest AWS regions. Taken from
@@ -224,57 +224,58 @@ REGION_MAPPING = {"A1":"us-east-1","A2":"us-east-1","AD":"eu-west-1","AE":"ap-so
 global DEFAULT_REGION
 DEFAULT_REGION = "us-east-1"
 
-WHOAMI="http://ec2-52-6-172-231.compute-1.amazonaws.com/"
+WHOAMI="http://ipinfo.io/"
 
 def get_closest_region():
-	ip = requests.get(WHOAMI).content.decode().strip()
-	country = requests.get("http://api.hostip.info/country.php?ip={}".format(ip)).content.decode().strip()
-	try:
-		region = REGION_MAPPING.get(country, "ap-northeast-1")
-		print("Using region {} for {} in {}".format(region, ip, country))
-		return region
-	except KeyError:
-		print("Could not find region for {} in {}, defaulting to {}".format(region, ip, country, DEFAULT_REGION))
-		return DEFAULT_REGION
+    info = requests.get(WHOAMI, headers={"accept": "application/json"}).json()
+    ip = info["ip"]
+    country = info["country"]
+    try:
+        region = REGION_MAPPING.get(country, "ap-northeast-1")
+        print("Using region {} for {} in {}".format(region, ip, country))
+        return region
+    except KeyError:
+        print("Could not find region for {} in {}, defaulting to {}".format(region, ip, country, DEFAULT_REGION))
+        return DEFAULT_REGION
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
 
-	parser.add_argument("-w", "--region", nargs="?",
-		help="AWS Region to connect to")
+    parser.add_argument("-w", "--region", nargs="?",
+        help="AWS Region to connect to")
 
-	parser.add_argument("-p", "--profile", default=None,
-		help="Boto profile to use for credentials, will use the default if not specified or invalid", metavar="PROFILE")
+    parser.add_argument("-p", "--profile", default=None,
+        help="Boto profile to use for credentials, will use the default if not specified or invalid", metavar="PROFILE")
 
-	parser.add_argument("-u", "--user", default="ubuntu",
-		help="Remote user to connect as, defaults to ubuntu")
+    parser.add_argument("-u", "--user", default="ubuntu",
+        help="Remote user to connect as, defaults to ubuntu")
 
-	parser.add_argument("-s", "--sudo", default=False, action="store_true",
-		help="Start the remote shell with root privileges")
+    parser.add_argument("-s", "--sudo", default=False, action="store_true",
+        help="Start the remote shell with root privileges")
 
-	parser.add_argument("-r", "--keep-running", default=False, action="store_true",
-		help="Keep the instance running after closing the connection")
+    parser.add_argument("-r", "--keep-running", default=False, action="store_true",
+        help="Keep the instance running after closing the connection")
 
-	parser.add_argument("ssh_args", nargs="*",
-		help="Additional options to pass on to SSH")
+    parser.add_argument("ssh_args", nargs="*",
+        help="Additional options to pass on to SSH")
 
-	args = parser.parse_args()
-	region = args.region
-	if not region:
-		region = get_closest_region()
+    args = parser.parse_args()
+    region = args.region
+    if not region:
+        region = get_closest_region()
 
-	connection = ec2.connect_to_region(region, profile_name=args.profile)
+    connection = ec2.connect_to_region(region, profile_name=args.profile)
 
-	playground = Playground(connection, args.user, args.ssh_args)
-	playground.connect(args.sudo)
-	if not args.keep_running:
-		try:
-			for i in range(3, 0, -1):
-				sys.stdout.write("\rShutting down instance {} in {} seconds; ^C to cancel".format(playground.instance, i))
-				sys.stdout.flush()
-				time.sleep(1)
-			print()
-			playground.stop_instance()
-		except KeyboardInterrupt:
-			print()
-			print("Leaving instance {} running".format(playground.instance))
+    playground = Playground(connection, args.user, args.ssh_args)
+    playground.connect(args.sudo)
+    if not args.keep_running:
+        try:
+            for i in range(3, 0, -1):
+                sys.stdout.write("\rShutting down instance {} in {} seconds; ^C to cancel".format(playground.instance, i))
+                sys.stdout.flush()
+                time.sleep(1)
+            print()
+            playground.stop_instance()
+        except KeyboardInterrupt:
+            print()
+            print("Leaving instance {} running".format(playground.instance))

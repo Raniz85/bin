@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+# Simple script for mirroring a directory to all plugged in USB drives using Rsync in parallell
+
+import math
+import os
+import platform
+import re
+import subprocess
+import time
+
+# To make it work in python 2 and 3.
+try:
+   input = raw_input
+except NameError:
+   pass
+
+this_platform = platform.system()
+mac_drive_name_regex = re.compile(r"^\s*volume name:\s*([a-z]+)\s*$", re.MULTILINE | re.IGNORECASE)
+mac_usb_device_regex = re.compile(r"^\s*protocol:\s*USB\s*$", re.MULTILINE | re.IGNORECASE)
+mac_mount_path_regex = re.compile(r"^\s*mount point:\s*(.*)$", re.MULTILINE | re.IGNORECASE)
+mac_disk_size_regex = re.compile(r"^\s*total size:\s*([0-9\.]+ [a-z]+) \(([0-9]+) Bytes\).*$", re.MULTILINE | re.IGNORECASE)
+
+class Drive:
+
+    def __init__(self, disk):
+        if this_platform == 'Linux':
+            self.driveName = disk[4:-10]
+            self.diskPath = os.path.join('/dev', 'disk', 'by-id', disk)
+            self.mountPath = os.path.join('/media', 'usb-mirror', self.driveName)
+            self.capacity = int(subprocess.check_output(["sudo", "blockdev", "--getsize64", self.diskPath]))
+            self.mounted = False
+        elif this_platform == 'Darwin':
+            info = subprocess.check_output(['diskutil', 'info', disk]).decode("utf8")
+            self.driveName = mac_drive_name_regex.search(info).group(1) + " ({})".format(disk)
+            #for line in info.splitlines():
+                #if 'Media Name' in line:
+                    #self.driveName = line.split(':')[-1].strip()
+                    #break
+            #self.mountPath = '/Volumes/{}'.format(disk.split('/Volumes/')[-1])
+            self.mountPath = mac_mount_path_regex.search(info).group(1)
+            self.diskPath = disk
+            #self.capacity = int(disk.split()[1]) * 1024
+            self.capacity = int(mac_disk_size_regex.search(info).group(2))
+            self.mounted = True
+
+    def mount(self):
+        if self.mounted:
+            return
+        if not os.path.exists(self.mountPath):
+            os.makedirs(self.mountPath)
+        print('Mounting {} on {}'.format(self.driveName, self.mountPath))
+        try:
+            subprocess.check_call(["sudo", "mount", self.diskPath, self.mountPath])
+            self.mounted = True
+        except subprocess.CalledProcessError:
+            pass
+
+    def unmount(self):
+        print('Unmounting {}'.format(self.driveName))
+        if this_platform == 'Linux':
+            return subprocess.Popen(["sudo", "umount", self.diskPath])
+        if this_platform == 'Darwin':
+            return subprocess.Popen(["diskutil", "unmount", "force", self.diskPath])
+
+    def mirror(self):
+        if self.mounted:
+            return subprocess.Popen(["rsync", "-v", "--recursive", "--delete-before", "./", self.mountPath], stdout=subprocess.PIPE)
+        else:
+            return None
+
+
+def do_syncing(drives):
+    
+    print("Will sync {} to the following drives".format(os.getcwd()))
+    for drive in drives:
+        print("  {:<45} {:>6} GB".format(drive.driveName, round(drive.capacity / 1024**3, 2)))
+    input("Press enter to continue or ^C to exit")
+
+    start = time.time()
+    times = dict()
+    processes = dict()
+    for drive in drives:
+        print("Mirroring to drive {}".format(drive.driveName))
+        drive.mount()
+        process = drive.mirror()
+        if process is not None:
+            processes[drive] = (process, False)
+        else:
+            print("Warning: could not start mirroring of drive {}".format(drive.driveName))
+        print()
+
+    unmounts = dict()
+    outputs = dict()
+    while len(processes) > 0:
+        for drive, (process, umount) in list(processes.items()):
+            if process.poll() is not None:
+                if umount:
+                    times[drive] = time.time()
+                    del processes[drive]
+                else:
+                    processes[drive] = (drive.unmount(), True)
+                    data =process.communicate()[0]
+                    output = data.decode("utf-8")
+                    outputs[drive] = output.strip().splitlines()
+        time.sleep(0.05)
+
+    end = time.time()
+
+    print()
+    print("{:^45} {:^12} {:^12}".format("Drive", "Time", "Speed"))
+    for drive, end_time  in sorted(times.items(), key=lambda x: x[1]):
+        size = int(outputs[drive][-2].split()[1].replace(",", ""))
+        duration = end_time - start
+        print("{:<45} {:>10} s {:>10} MB/s".format(drive.driveName, round(duration, 2), round(size / 1024**2 / duration, 2)))
+
+    print()
+    print("Total time: {} s".format(round(end - start, 2)))
+
+def is_mac_usb(device):
+    try:
+        info = subprocess.check_output(["diskutil", "info", device]).decode('utf8')
+    except subprocess.CalledProcessError:
+        return False
+    match = mac_usb_device_regex.search(info)
+    if match:
+        return True
+    return False
+
+def sync_mac():
+    drives = []
+    df_result = subprocess.check_output(['mount']).decode('utf8')
+    for line in df_result.split('\n'):
+        name = line.split(" ", 1)[0]
+        if is_mac_usb(name):
+            drives.append(Drive(name))
+    
+    do_syncing(drives)
+
+def sync_linux():
+    drives = []
+    for root, dirs, files in os.walk('/dev/disk/by-id'):
+        for name in files:
+            if name.startswith("usb-") and name.endswith("part1"):
+                drives.append(Drive(name))
+    
+    do_syncing(drives)
+    
+if __name__ == '__main__':
+    
+    if this_platform == 'Darwin':
+        sync_mac()
+    elif this_platform == 'Linux':
+        sync_linux()
+
+

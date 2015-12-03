@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# -*- encoding: utf8 -*-
+
+import csv
+import calendar
+import datetime
+import subprocess
+import argparse
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import time
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("files", help="Files to inspect", nargs="+")
+parser.add_argument("--offset", help="Offset to apply to the timestamps in the result file", default=0)
+parser.add_argument("--output", "-o", help="File to write the output to", nargs="?")
+
+args = parser.parse_args()
+
+def iso8601_to_epoch(datestring):
+    return time.mktime(time.strptime(datestring, "%Y-%m-%dT%H:%M:%S.%fZ"))
+
+global offset
+offset = args.offset
+try:
+    offset = int(offset)
+except ValueError:
+    offset = iso8601_to_epoch(offset)
+print("Using offset of {} ({})".format(offset, time.ctime(offset)))
+
+def gather_data(filename):
+    global offset
+    output = subprocess.check_output(["ffprobe", '-show_frames', '-select_streams', 'v:0', filename], stderr=subprocess.DEVNULL).decode("utf-8")
+    timestamps = [float(a.split('=')[-1]) for a in output.splitlines() if 'pkt_pts_time' in a]
+    diffs = np.diff(timestamps)
+    times = []
+    for diff in diffs:
+        times.append(offset)
+        offset += diff
+    return timestamps, np.array(list(zip(times, np.array([round(r,2) for r in (1 / diffs)]))))
+
+rates = None
+timestamps = None
+i = 0
+for file in args.files:
+    print("Analyzing file {} of {}: {}".format(i + 1, len(args.files), file))
+    t, r = gather_data(file) 
+    if rates is None:
+        rates = r
+        timestamps = t
+    else:
+        t = np.add(t, timestamps[-1])
+        rates = np.r_[rates, r]
+        timestamps = np.append(timestamps, t)
+    i += 1
+print("Total duration {}s".format(timestamps[-1]))
+i = 0
+prev_rate = None
+for stamp, rate in rates:
+    if prev_rate is not None and rate < prev_rate:
+        print("Frame drop ({} -> {}) at frame {} (time: {})".format(prev_rate, rate, i, stamp))
+    i += 1
+
+plt.figure()
+plt.title("Framerates")
+plt.plot(rates[:,0], rates[:,1], '.')
+
+plt.figure()
+plt.title("Timestamps")
+plt.plot(timestamps)
+
+plt.show()
+
+if args.output:
+    with open(args.output, "w") as report:
+        writer = csv.writer(report)
+        for row in rates:
+            csv_row = ["{:.6f}".format(row[0]), "{:.2f}".format(row[1])]
+            writer.writerow(csv_row)

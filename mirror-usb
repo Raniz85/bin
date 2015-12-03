@@ -6,7 +6,27 @@ import os
 import platform
 import re
 import subprocess
+import tempfile
 import time
+
+PORTS = {
+        "pci-0000:00:14.0-usb-0:1.4:1.0-scsi-0:0:0:0-part1": "Rear, port 7",
+        "pci-0000:00:14.0-usb-0:1.1.4:1.0-scsi-0:0:0:0-part1": "Rear, port 6",
+        "pci-0000:00:14.0-usb-0:1.3:1.0-scsi-0:0:0:0-part1": "Rear, port 5",
+        "pci-0000:00:14.0-usb-0:1.2:1.0-scsi-0:0:0:0-part1": "Rear, port 4",
+        "pci-0000:00:14.0-usb-0:1.1.3:1.0-scsi-0:0:0:0-part1": "Rear, port 3",
+        "pci-0000:00:14.0-usb-0:1.1.2:1.0-scsi-0:0:0:0-part1": "Rear, port 2",
+        "pci-0000:00:14.0-usb-0:1.1.1:1.0-scsi-0:0:0:0-part1": "Rear, port 1",
+
+        "pci-0000:00:14.0-usb-0:3.4:1.0-scsi-0:0:0:0-part1": "Front, port 7",
+        "pci-0000:00:14.0-usb-0:3.1.4:1.0-scsi-0:0:0:0-part1": "Front, port 6",
+        "pci-0000:00:14.0-usb-0:3.3:1.0-scsi-0:0:0:0-part1": "Front, port 5",
+        "pci-0000:00:14.0-usb-0:3.2:1.0-scsi-0:0:0:0-part1": "Front, port 4",
+        "pci-0000:00:14.0-usb-0:3.1.3:1.0-scsi-0:0:0:0-part1": "Front, port 3",
+        "pci-0000:00:14.0-usb-0:3.1.2:1.0-scsi-0:0:0:0-part1": "Front, port 2",
+        "pci-0000:00:14.0-usb-0:3.1.1:1.0-scsi-0:0:0:0-part1": "Front, port 1",
+}
+
 
 # To make it work in python 2 and 3.
 try:
@@ -29,6 +49,22 @@ class Drive:
             self.mountPath = os.path.join('/media', 'usb-mirror', self.driveName)
             self.capacity = int(subprocess.check_output(["sudo", "blockdev", "--getsize64", self.diskPath]))
             self.mounted = False
+            self.devicePath = os.path.realpath(self.diskPath)
+            self.deviceName = os.path.basename(self.devicePath)
+            for root, dirs, files in os.walk('/dev/disk/by-path'):
+                for file in files:
+                    fullPath = os.path.join(root, file)
+                    if self.devicePath == os.path.realpath(fullPath):
+                        path = os.path.basename(fullPath)
+                        if path in PORTS:
+                            self.port = PORTS[path]
+                            break
+                else:
+                    continue
+                break
+            else:
+                self.port = None
+            self.driveName = "{} ({}) ({})".format(self.driveName, self.deviceName, self.port)
         elif this_platform == 'Darwin':
             info = subprocess.check_output(['diskutil', 'info', disk]).decode("utf8")
             self.driveName = mac_drive_name_regex.search(info).group(1) + " ({})".format(disk)
@@ -64,7 +100,19 @@ class Drive:
 
     def mirror(self):
         if self.mounted:
-            return subprocess.Popen(["rsync", "-v", "--recursive", "--delete-before", "./", self.mountPath], stdout=subprocess.PIPE)
+            return subprocess.Popen([
+                "rsync",
+                "-v",
+                "--copy-links",
+                "--copy-dirlinks",
+                "--update",
+                "--recursive",
+                "--inplace",
+                "--delete",
+                "--delete-before",
+                "./",
+                self.mountPath,
+                ], stdout=subprocess.PIPE)
         else:
             return None
 
@@ -110,6 +158,9 @@ def do_syncing(drives):
     print("{:^45} {:^12} {:^12}".format("Drive", "Time", "Speed"))
     for drive, end_time  in sorted(times.items(), key=lambda x: x[1]):
         size = int(outputs[drive][-2].split()[1].replace(",", ""))
+        logfile = os.path.join(tempfile.gettempdir(), drive.driveName) + ".log"
+        with open(logfile, "w") as output:
+            output.write("\n".join(outputs[drive]))
         duration = end_time - start
         print("{:<45} {:>10} s {:>10} MB/s".format(drive.driveName, round(duration, 2), round(size / 1024**2 / duration, 2)))
 

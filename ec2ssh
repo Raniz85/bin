@@ -1,0 +1,107 @@
+#!/home/raniz/opt/miniconda3/envs/python3/bin/python
+
+import argparse
+import os
+import subprocess
+import sys
+
+import boto3
+
+ami_users={
+    'ami-6b60011c': 'ec2-user',
+    'ami-e1398992': 'ec2-user'
+}
+
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('-p', '--profile', help='AWS profile name to connect with', nargs='?', default=None)
+parser.add_argument('-s', '--sts-role', help='AWS STS role to connect with', nargs='?', default=None)
+parser.add_argument('-r', '--region', help='AWS region to connect to', nargs='?', default='eu-west-1')
+
+parser.add_argument('filters', help='Filters to narrow down the number of instances', nargs='*')
+
+args = parser.parse_args()
+
+session = boto3.session.Session(profile_name=args.profile, region_name=args.region)
+if args.sts_role:
+    sts = session.client('sts')
+    assumed_role = sts.assume_role(RoleArn = args.role, RoleSessionName = session_name)
+    credentials = assumed_role["Credentials"]
+
+    session = boto3.session.Session(region_name=args.region,
+        aws_access_key_id=credentials['AccessKeyId'],
+        aws_secret_access_key=credentials['SecretAccessKey'],
+        aws_session_token=credentials['SessionToken'])
+
+ec2 = session.resource('ec2')
+
+def matches(instance, filters):
+    for tag in instance.tags:
+        for filter in filters:
+            if filter.lower() in tag['Value'].lower():
+                return True
+
+
+def select_instance(args, action):
+    filters = [{
+        'Name': 'instance-state-name',
+        'Values': ['pending', 'running']
+    }]
+    visited_instances = []
+    first = True
+    while True:
+        instances = list(ec2.instances.filter(Filters=filters))
+        instances = [ i for i in instances if i.id not in visited_instances and matches(i, args.filters) ]
+        if len(instances) == 0:
+            if first:
+                print("No unvisited instances matched your query")
+            else: 
+                print("No more instances")
+            return
+
+        pad = len(instances) // 10
+        i = 0
+        for instance in instances:
+            tags = []
+            name = None
+            for tag in instance.tags:
+                if tag['Key'].lower() == 'name':
+                    name = tag['Value']
+                    continue
+                tags.append('\t{}: {}'.format(tag['Key'], tag['Value']))
+            if name is not None:
+                print('{:>{pad}d}: {} ({}) {}'.format(i, instance.id, name, instance.state['Name'], pad=pad))
+            else:
+                print('{:>{pad}d}: {} {}'.format(i, instance.id, instance.state['Name'], pad=pad))
+            print('\t' + '\n\t'.join(tags))
+            i += 1
+        selection = 0 if len(instances) == 1 and first else None
+        while selection is None:
+            selection = input('Select instance to SSH to, q to quit: ')
+            if selection == 'q':
+                return
+            try:
+                selection = int(selection)
+                if selection < 0 or selection > len(instances) -1:
+                    print('Out of bounds: {}'.format(selection))
+                    selection = None
+            except ValueError:
+                print('Not an integer: {}'.format(selection))
+                selection = None
+        instance = instances[selection]
+        action(args, instance)
+        visited_instances.append(instance.id)
+        first = False
+
+def ssh_to_instance(args, instance):
+        ami = instance.image_id
+        user = ami_users.get(ami, 'ubuntu')
+        # Remove host key, if present
+        command = ['ssh-keygen', '-f', os.path.expanduser('~/.ssh/known_hosts'), '-R', instance.private_dns_name]
+        subprocess.run(command)
+        command = ['ssh', '-o', 'StrictHostKeyChecking=no', '{}@{}'.format(user, instance.private_dns_name)]
+        subprocess.run(command)
+
+if __name__ == '__main__':
+    select_instance(args, ssh_to_instance)

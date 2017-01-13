@@ -1,5 +1,5 @@
 #!/bin/sh
-fallback=~/.gvm/gradle/current/bin/gradle
+fallback=~/.sdkman/candidates/gradle/current/bin/gradle
 originalPwd=$(pwd)
 while [ $(pwd) != "/" ] &&  [ ! -f "gradlew" ];
 do

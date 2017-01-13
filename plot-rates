@@ -35,29 +35,34 @@ def gather_data(filename):
     output = subprocess.check_output(["ffprobe", '-show_frames', '-select_streams', 'v:0', filename], stderr=subprocess.DEVNULL).decode("utf-8")
     timestamps = [float(a.split('=')[-1]) for a in output.splitlines() if 'pkt_pts_time' in a]
     sizes = [float(a.split('=')[-1]) for a in output.splitlines() if 'pkt_size' in a]
+    durations = [float(a.split('=')[-1]) for a in output.splitlines() if 'pkt_duration_time' in a]
+    bitrates = [ s / d for (s, d) in zip(sizes, durations) ]
     diffs = np.diff(timestamps)
     times = []
     for diff in diffs:
         times.append(offset)
         offset += diff
-    return timestamps, np.array(list(zip(times, np.array([round(r,2) for r in (1 / diffs)])))), sizes
+    return timestamps, np.array(list(zip(times, np.array([round(r,2) for r in (1 / diffs)])))), sizes, bitrates
 
 rates = None
 timestamps = None
 sizes = None
+bitrates = None
 i = 0
 for file in args.files:
     print("Analyzing file {} of {}: {}".format(i + 1, len(args.files), file))
-    t, r, s = gather_data(file) 
+    t, r, s, br = gather_data(file) 
     if rates is None:
         rates = r
         timestamps = t
         sizes = s
+        bitrates = br
     else:
         t = np.add(t, timestamps[-1])
         rates = np.r_[rates, r]
         timestamps = np.append(timestamps, t)
         sizes = np.append(sizes, s)
+        bitrates = np.append(bitrates, br)
     i += 1
 print("Total duration {}s".format(timestamps[-1]))
 i = 0
@@ -78,6 +83,10 @@ plt.plot(timestamps)
 plt.figure()
 plt.title("Frame Sizes")
 plt.plot(sizes)
+
+plt.figure()
+plt.title("Bit Rates")
+plt.plot(bitrates)
 
 plt.show()
 

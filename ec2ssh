@@ -8,8 +8,11 @@ import sys
 import boto3
 
 ami_users={
+    'ami-e4d18e93': 'ec2-user',
     'ami-6b60011c': 'ec2-user',
-    'ami-e1398992': 'ec2-user'
+    'ami-e1398992': 'ec2-user',
+    'ami-a1be93d6': 'ec2-user',
+    'ami-bff32ccc': 'ec2-user',
 }
 
 
@@ -26,7 +29,7 @@ args = parser.parse_args()
 session = boto3.session.Session(profile_name=args.profile, region_name=args.region)
 if args.sts_role:
     sts = session.client('sts')
-    assumed_role = sts.assume_role(RoleArn = args.role, RoleSessionName = session_name)
+    assumed_role = sts.assume_role(RoleArn = args.sts_role, RoleSessionName = 'ec2ssh')
     credentials = assumed_role["Credentials"]
 
     session = boto3.session.Session(region_name=args.region,
@@ -37,6 +40,10 @@ if args.sts_role:
 ec2 = session.resource('ec2')
 
 def matches(instance, filters):
+    if not filters:
+        return True
+    if instance.tags is None:
+        return False
     for tag in instance.tags:
         for filter in filters:
             if filter.lower() in tag['Value'].lower():
@@ -65,11 +72,12 @@ def select_instance(args, action):
         for instance in instances:
             tags = []
             name = None
-            for tag in instance.tags:
-                if tag['Key'].lower() == 'name':
-                    name = tag['Value']
-                    continue
-                tags.append('\t{}: {}'.format(tag['Key'], tag['Value']))
+            if instance.tags is not None:
+                for tag in instance.tags:
+                    if tag['Key'].lower() == 'name':
+                        name = tag['Value']
+                        continue
+                    tags.append('\t{}: {}'.format(tag['Key'], tag['Value']))
             if name is not None:
                 print('{:>{pad}d}: {} ({}) {}'.format(i, instance.id, name, instance.state['Name'], pad=pad))
             else:
